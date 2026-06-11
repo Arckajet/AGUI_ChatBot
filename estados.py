@@ -1,0 +1,1 @@
+# CÓDIGO de Angel (Máquina de Estados Finitos y Fallbacks)

@@ -1,0 +1,1 @@
+# CÓDIGO DE ELIAS (Lectura y escritura de inventario.json)

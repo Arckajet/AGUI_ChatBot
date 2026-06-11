@@ -1,0 +1,4 @@
+# Archivo donde anotaremos las librerías (FastAPI, etc.)
+
+fastapi==0.111.0
+uvicorn==0.30.1
