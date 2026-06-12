@@ -1,0 +1,16 @@
+{
+  "productos": [
+    {
+      "id": "V01",
+      "nombre": "Grand Thef Auto 6",
+      "precio": 60.0,
+      "stock": 3
+    },
+    {
+      "id": "V02",
+      "nombre": "FIFA 26",
+      "precio": 70.0,
+      "stock": 12
+    }
+  ]
+}
