@@ -1,0 +1,16 @@
+{
+  "productos": [
+    {
+      "id": "P01",
+      "nombre": "Pastel de Chocolate",
+      "precio": 15.0,
+      "stock": 5
+    },
+    {
+      "id": "P02",
+      "nombre": "Cupcake de Vainilla",
+      "precio": 2.5,
+      "stock": 0
+    }
+  ]
+}
