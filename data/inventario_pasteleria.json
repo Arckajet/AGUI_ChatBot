@@ -1,16 +1,22 @@
 {
-  "productos": [
-    {
-      "id": "1",
-      "nombre": "Torta de Chocolate",
-      "precio": 15.0,
-      "stock": 5
-    },
-    {
-      "id": "2",
-      "nombre": "Pie de Limón",
-      "precio": 2.5,
-      "stock": 0
-    }
-  ]
+    "productos": [
+        {
+            "id": "1",
+            "nombre": "Torta de Chocolate",
+            "precio": 15.0,
+            "stock": 5
+        },
+        {
+            "id": "2",
+            "nombre": "Pie de Limón",
+            "precio": 2.5,
+            "stock": 0
+        },
+        {
+            "id": "3",
+            "nombre": "Torta de Guanabana",
+            "precio": 22.5,
+            "stock": 8
+        }
+    ]
 }
