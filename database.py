@@ -14,6 +14,11 @@ def leer_inventario(archivo_ruta):
 # 2. Función general para guardar/actualizar el archivo JSON
 def guardar_inventario(archivo_ruta, datos):
     """Guarda el diccionario actualizado en el archivo JSON."""
+    # Asegura que si la carpeta contenedora (como 'data') no existe, la cree automáticamente
+    carpeta = os.path.dirname(archivo_ruta)
+    if carpeta and not os.path.exists(carpeta):
+        os.makedirs(carpeta)
+        
     with open(archivo_ruta, 'w', encoding='utf-8') as archivo:
         json.dump(datos, archivo, indent=4, ensure_ascii=False)
 
