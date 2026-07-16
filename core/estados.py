@@ -59,6 +59,16 @@ class MaquinaEstadosAGUI:
             os.path.join(_CORE_DIR, "..", "data", "incidencias.json")
         )
 
+        # FASE 4 — Sync William's cart persistence path to data/, misma
+        # convención que ya se usaba para soporte.RUTA_INCIDENCIAS.
+        carrito.RUTA_CARRITOS = os.path.abspath(
+            os.path.join(_CORE_DIR, "..", "data", "carritos.json")
+        )
+        # Como carrito.py ya cargó los carritos al importarse (con la ruta
+        # relativa por defecto), se vuelve a cargar aquí una vez fijada la
+        # ruta absoluta correcta, para no perder lo que ya hubiera en disco.
+        carrito.cargar_carritos_desde_json()
+
     # =================================================================
     # PRIVATE HELPERS
     # =================================================================
@@ -151,6 +161,16 @@ class MaquinaEstadosAGUI:
         with self._lock:
             sesion = self.obtener_o_crear_sesion(user_id)
             estado_actual = sesion["estado"]
+
+            # ─── INTERCEPTOR: Admin — cerrar ticket (Eliezer, Fase 4) ─
+            # OJO: debe revisarse ANTES que "##admin" a secas, porque
+            # "##admin_resuelto" también empieza con el prefijo "##admin".
+            if cleaned.startswith("##admin_resuelto"):
+                return soporte.resolver_ticket_admin(cleaned)
+
+            # ─── INTERCEPTOR: Admin — reporte diario (Eliezer, Fase 4) ─
+            if cleaned.startswith("##reporte"):
+                return soporte.generar_reporte_diario()
 
             # ─── INTERCEPTOR: Admin command (Eliezer) ────────────
             if cleaned.startswith("##admin"):
