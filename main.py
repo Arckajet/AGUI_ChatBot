@@ -6,13 +6,22 @@
 # FASE 4 - ESTABILIZACIÓN DEL BACKEND (CONCURRENCIA Y ERRORES HTTP)
 # =====================================================================
 
+# Importaciones
+# pyrefly: ignore [missing-import]
+import uvicorn
+# pyrefly: ignore [missing-import]
 from fastapi import FastAPI, Request
+# pyrefly: ignore [missing-import]
 from fastapi.responses import PlainTextResponse
+# pyrefly: ignore [missing-import]
 import httpx
+# pyrefly: ignore [missing-import]
 import os
+from utils.check_system import main as run_check
+from utils.ux_helper import UXHelper
 
 # Importar el cerebro del bot (Ángel)
-from estados import MaquinaEstadosAGUI
+from core.estados import MaquinaEstadosAGUI
 
 # ── Inicializar la app y la máquina de estados ──────────────────────
 app = FastAPI(
@@ -20,6 +29,10 @@ app = FastAPI(
     description="Backend del asistente de autoatención AGUI",
     version="2.1.0"
 )
+
+# --- EJECUCIÓN DEL CHEQUEO AL INICIO ---
+print("🚀 Verificando sistema antes de arrancar...")
+run_check()
 
 # Una sola instancia de la máquina compartida por todos los usuarios
 maquina = MaquinaEstadosAGUI()
@@ -121,10 +134,13 @@ async def recibir_mensaje(request: Request):
 
         # ── Paso 2: Pasar a la máquina de estados (cerebro de Ángel) ─
         try:
-            respuesta_bot = maquina.procesar_transicion(user_id, user_input)
+            if user_input.lower() in ["/ayuda", "ayuda"]:
+                respuesta_bot = UXHelper.get_user_manual()
+            else:
+                respuesta_bot = maquina.procesar_transicion(user_id, user_input)
         except Exception as e:
             print(f"[ERROR FSM] {e}")
-            respuesta_bot = MENSAJE_ERROR_USUARIO
+            respuesta_bot = UXHelper.format_error("Hubo un problema interno procesando tu solicitud.")
 
         print(f"[WEBHOOK] Respuesta del bot: '{respuesta_bot}'")
 
