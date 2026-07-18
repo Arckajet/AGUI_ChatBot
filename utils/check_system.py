@@ -1,18 +1,15 @@
+# pyrefly: ignore [missing-import]
+from dotenv import load_dotenv
 import os
 import sys
 import json
 import socket
-# pyrefly: ignore [missing-import]
-from dotenv import load_dotenv
-# pyrefly: ignore [missing-import]
-from pyngrok import ngrok, conf
+import subprocess
 
 load_dotenv()
 # --- CONFIGURACIÓN ---
 PORT = 8000
 DATA_DIR = "data"
-# Reemplaza esto con tu token real de Ngrok (búscalo en dashboard.ngrok.com)
-NGROK_AUTHTOKEN = os.getenv("NGROK_AUTHTOKEN")
 
 # Lista de archivos JSON esenciales que deberían existir en data/
 # Si no existen, el script los creará vacíos ({}) para que no falle el bot.
@@ -69,51 +66,78 @@ def is_port_free(port):
             return True
 
 
-def start_ngrok(port):
-    """Configura el token de Ngrok e inicia el túnel."""
-    print("🌐 Configurando e iniciando Ngrok...")
-    if NGROK_AUTHTOKEN == "TU_TOKEN_DE_NGROK_AQUÍ" or not NGROK_AUTHTOKEN:
-        print("  ⚠️ Alerta: No has puesto tu token de Ngrok en la variable NGROK_AUTHTOKEN.")
-        print("  La sesión podría expirar en un par de horas si no configuras el token.")
-        return
-        
+def start_localtunnel(port):
+    """Inicia el túnel de LocalTunnel en segundo plano."""
+    print("🌐 Iniciando LocalTunnel...")
     try:
-        # Configurar el authtoken de manera persistente
-        conf.get_default().auth_token = NGROK_AUTHTOKEN
+        # Ejecutamos localtunnel (lt) en segundo plano sin bloquear el hilo principal.
+        # En Windows, lt se instala como un script de node (a menudo requiere shell=True).
+        process = subprocess.Popen(
+            ["lt", "--port", str(port)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            shell=True
+        )
         
-        # Abrir el túnel HTTP en el puerto indicado
-        public_url = ngrok.connect(port, "http")
-        print("\n🚀 ¡TODO LISTO Y EN LÍNEA!")
-        print(f"🔗 Tu URL pública de Ngrok es: {public_url}")
-        print("💡 Copia esta URL en la configuración de tu webhook de Telegram, WhatsApp o Discord.\n")
+        # Esperamos un momento para leer la URL generada en stdout
+        import time
+        time.sleep(3)
+        
+        # Intentamos obtener la primera línea de salida que suele contener la URL
+        # Ojo: Popen.poll() comprueba si el proceso sigue vivo
+        if process.poll() is None:
+            # En lugar de un hilo eterno, leemos una vez de forma controlada
+            # para capturar la URL sin dejar un hilo "huérfano" al cerrar
+            def read_once():
+                try:
+                    for line in iter(process.stdout.readline, ''):
+                        if "your url is:" in line:
+                            print(f"\n🚀 ¡TUNEL EN LÍNEA!")
+                            print(f"🔗 {line.strip()}")
+                            break
+                except:
+                    pass
+            
+            import threading
+            t = threading.Thread(target=read_once, daemon=True)
+            t.start()
+            t.join(timeout=2) # Espera máximo 2 segundos para imprimir la URL y sigue
+        else:
+            stdout, stderr = process.communicate()
+            print(f" ❌ Error al iniciar LocalTunnel: {stderr or stdout}")
+            
     except Exception as e:
-        print(f"  ❌ Error al iniciar Ngrok: {e}")
+        print(f" ❌ Error al ejecutar LocalTunnel: {e}")
 
 
-def main():
+def main() -> bool:
+    """Run all health checks. Returns True if the system is healthy, False otherwise."""
     print("=" * 50)
     print("🚀 INICIANDO CONTROL DE SALUD DEL SISTEMA (Elias Tool) 🚀")
     print("=" * 50)
-    
+
     # 1. Comprobar carpetas
     check_directories()
-    
+
     # 2. Comprobar JSONs
     if not check_json_files():
         print("\n💥 El sistema no puede arrancar debido a fallos en los archivos JSON.")
-        sys.exit(1)
-        
+        return False
+
     # 3. Comprobar que el puerto 8000 no esté bloqueado
     if not is_port_free(PORT):
         print(f"\n💥 Libera el puerto {PORT} antes de volver a ejecutar el bot.")
-        sys.exit(1)
-        
-    # 4. Si todo está perfecto, levantar Ngrok
+        return False
+
+    # 4. Si todo está perfecto, levantar LocalTunnel
     print("\n✅ Chequeo de salud del sistema exitoso.")
-    start_ngrok(PORT)
-    
+    start_localtunnel(PORT)
+
     print("💬 Ahora puedes iniciar el servidor de tu chatbot en otra terminal.")
     print("=" * 50)
+    return True
 
 if __name__ == "__main__":
-    main()
+    if not main():
+        sys.exit(1)

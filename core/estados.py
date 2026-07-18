@@ -17,6 +17,7 @@ from data import database  # Módulo de Elias
 import interfaz            # Módulo de Roberto
 import carrito             # Módulo de William
 import soporte             # Módulo de Eliezer
+from utils.ux_helper import UXHelper
 
 
 class MaquinaEstadosAGUI:
@@ -85,8 +86,8 @@ class MaquinaEstadosAGUI:
         # Reject non-string types (images, stickers, voice notes, location
         # pins, etc. arrive as dicts/bytes in webhook payloads)
         if not isinstance(raw_input, str):
-            return None, (
-                "⚠️ Solo acepto comandos de texto.\n"
+            return None, UXHelper.format_error(
+                "Solo acepto comandos de texto.\n"
                 "Por favor, escribe un número o una palabra para continuar."
             )
 
@@ -95,15 +96,15 @@ class MaquinaEstadosAGUI:
 
         # Reject empty or whitespace-only input
         if not cleaned:
-            return None, (
-                "⚠️ No recibí ningún texto.\n"
+            return None, UXHelper.format_error(
+                "No recibí ningún texto.\n"
                 "Por favor, escribe una opción válida para continuar."
             )
 
         # Reject strings with only non-printable / control characters
         if not any(c.isprintable() and not c.isspace() for c in cleaned):
-            return None, (
-                "⚠️ Solo acepto comandos de texto.\n"
+            return None, UXHelper.format_error(
+                "Solo acepto comandos de texto.\n"
                 "Por favor, escribe un número o una palabra para continuar."
             )
 
@@ -225,7 +226,7 @@ class MaquinaEstadosAGUI:
                     return soporte.menu_soporte()
 
                 elif cleaned == "0":
-                    return "👋 ¡Gracias por usar AGUI Chatbot! Hasta luego."
+                    return UXHelper.format_success("¡Gracias por usar AGUI Chatbot! Hasta luego. 👋")
 
                 else:
                     return self.control_fallback(estado_actual)
@@ -269,10 +270,10 @@ class MaquinaEstadosAGUI:
                                 "marca 0 para volver al menú principal._"
                             )
                         else:
-                            return "❌ Error inesperado al procesar el producto."
+                            return UXHelper.format_error("Error inesperado al procesar el producto.")
                     else:
-                        return (
-                            f"❌ Lo siento, el producto ID '{cleaned}' "
+                        return UXHelper.format_error(
+                            f"Lo siento, el producto ID '{cleaned}' "
                             "no está disponible o no existe."
                         )
 
@@ -318,9 +319,11 @@ class MaquinaEstadosAGUI:
             else:
                 self._resetear_sesion_a_menu(sesion)
                 return (
-                    "⚠️ Ocurrió un error inesperado en la sesión.\n"
-                    "Te he devuelto al menú principal.\n\n"
-                    + interfaz.mostrar_bienvenida()
+                    UXHelper.format_error(
+                        "Ocurrió un error inesperado en la sesión.\n"
+                        "Te he devuelto al menú principal."
+                    )
+                    + "\n\n" + interfaz.mostrar_bienvenida()
                 )
 
     def control_fallback(self, estado_contexto):
@@ -346,4 +349,4 @@ class MaquinaEstadosAGUI:
             ),
         }
         guia = guias.get(estado_contexto, "Escribe *menu* para volver al inicio.")
-        return f"⚠️ Opción inválida. {guia}"
+        return UXHelper.format_error(f"Opción inválida. {guia}")
