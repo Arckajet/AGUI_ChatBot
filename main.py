@@ -30,20 +30,24 @@ app = FastAPI(
     version="2.1.0"
 )
 
-# --- EJECUCIÓN DEL CHEQUEO AL INICIO ---
-print("🚀 Verificando sistema antes de arrancar...")
-run_check()
-
 # Una sola instancia de la máquina compartida por todos los usuarios
 maquina = MaquinaEstadosAGUI()
+
+
+@app.on_event("startup")
+def startup_health_check():
+    """Run system health check once when the server starts. Abort if it fails."""
+    print("🚀 Verificando sistema antes de arrancar...")
+    if not run_check():
+        raise RuntimeError(
+            "Health check failed. Fix the issues above before starting the server."
+        )
 
 # ── Credenciales Twilio (se leen desde variables de entorno) ─────────
 TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
 TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN", "")
 TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
 
-# Mensaje de error genérico pedido en la guía de Fase 4
-MENSAJE_ERROR_USUARIO = "⚠️ Error, intenta de nuevo. Escribe *Menu* para reiniciar."
 
 
 # ── Función auxiliar: enviar mensaje de vuelta a WhatsApp ────────────
@@ -160,7 +164,7 @@ async def recibir_mensaje(request: Request):
             try:
                 await enviar_mensaje_whatsapp(
                     numero_destino=user_id,
-                    mensaje=MENSAJE_ERROR_USUARIO
+                    mensaje=UXHelper.format_error("Hubo un problema procesando tu solicitud. Escribe *Menu* para reiniciar.")
                 )
             except Exception as e2:
                 print(f"[ERROR ENVÍO FALLBACK] {e2}")
@@ -183,7 +187,7 @@ async def test_mensaje(user_id: str, mensaje: str):
     try:
         respuesta = maquina.procesar_transicion(user_id, mensaje)
     except Exception as e:
-        respuesta = f"Error: {str(e)}"
+        respuesta = UXHelper.format_error(str(e))
 
     return {
         "user_id":   user_id,
