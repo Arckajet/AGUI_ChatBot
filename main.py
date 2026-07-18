@@ -10,15 +10,52 @@
 # pyrefly: ignore [missing-import]
 import uvicorn
 # pyrefly: ignore [missing-import]
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 # pyrefly: ignore [missing-import]
 from fastapi.responses import PlainTextResponse
 # pyrefly: ignore [missing-import]
 import httpx
 # pyrefly: ignore [missing-import]
 import os
+import json
+import time
+import interfaz
 from utils.check_system import main as run_check
 from utils.ux_helper import UXHelper
+
+
+def safe_print(*args, **kwargs):
+    """Imprime de forma segura en la consola de Windows evitando UnicodeEncodeError."""
+    try:
+        text = " ".join(str(arg) for arg in args)
+        print(text, **kwargs)
+    except UnicodeEncodeError:
+        try:
+            # Reemplazar emojis/caracteres no cp1252 con "?"
+            clean_text = text.encode('ascii', errors='replace').decode('ascii')
+            print(clean_text, **kwargs)
+        except Exception:
+            pass
+
+RUTA_SESIONES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "sesiones_usuarios.json")
+
+def cargar_sesiones():
+    """Carga las sesiones desde el archivo JSON de forma segura."""
+    try:
+        with open(RUTA_SESIONES, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        # Si no existe o está corrupto, retorna un dict vacío y no tumba el server
+        return {}
+
+def guardar_sesiones(sesiones_dict):
+    """Guarda las sesiones en el archivo JSON."""
+    try:
+        os.makedirs(os.path.dirname(RUTA_SESIONES), exist_ok=True)
+        with open(RUTA_SESIONES, "w", encoding="utf-8") as f:
+            json.dump(sesiones_dict, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"[ERROR PERSISTENCIA] No se pudo guardar la sesión: {e}")
 
 # Importar el cerebro del bot (Ángel)
 from core.estados import MaquinaEstadosAGUI
@@ -33,50 +70,46 @@ app = FastAPI(
 # Una sola instancia de la máquina compartida por todos los usuarios
 maquina = MaquinaEstadosAGUI()
 
-
-@app.on_event("startup")
-def startup_health_check():
-    """Run system health check once when the server starts. Abort if it fails."""
-    print("🚀 Verificando sistema antes de arrancar...")
-    if not run_check():
-        raise RuntimeError(
-            "Health check failed. Fix the issues above before starting the server."
-        )
-
-# ── Credenciales Twilio (se leen desde variables de entorno) ─────────
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+# Mensaje de error genérico pedido en la guía de Fase 4
+MENSAJE_ERROR_USUARIO = "⚠️ Error, intenta de nuevo. Escribe *Menu* para reiniciar."
 
 
-
-# ── Función auxiliar: enviar mensaje de vuelta a WhatsApp ────────────
-async def enviar_mensaje_whatsapp(numero_destino: str, mensaje: str):
+# ── Función auxiliar: enviar mensaje de vuelta a WhatsApp con la nueva API ────────────
+async def enviar_mensaje(numero_destino: str, mensaje: str) -> bool:
     """
-    Envía un mensaje de texto al cliente via Twilio WhatsApp API.
-    numero_destino debe tener el formato: whatsapp:+584121234567
+    Envía un mensaje de texto al cliente a través del nuevo proveedor WASender.
     """
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
+    url = os.getenv("WASENDER_API_URL", "https://api.wasenderapi.com/v1/send/message")
+    token = os.getenv("WASENDER_API_TOKEN", "")
 
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
     payload = {
-        "From": TWILIO_WHATSAPP_FROM,
-        "To":   numero_destino,
-        "Body": mensaje
+        "to": numero_destino,
+        "text": mensaje
     }
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url,
-            data=payload,
-            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        )
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=10.0
+            )
 
-    if response.status_code == 201:
-        print(f"[TWILIO OK] Mensaje enviado a {numero_destino}")
-    else:
-        print(f"[TWILIO ERROR] {response.status_code} — {response.text}")
+        if response.status_code in [200, 201]:
+            print(f"[WASENDER OK] Mensaje enviado a {numero_destino}")
+            return True
+        else:
+            print(f"[WASENDER ERROR] {response.status_code} — {response.text}")
+            return False
 
-    return response
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError) as e:
+        print(f"[WASENDER EXCEPTION] Error al conectar con WASender para {numero_destino}: {e}")
+        return False
 
 
 # ── Ruta raíz: verificar que el servidor está vivo ───────────────────
@@ -111,68 +144,123 @@ def home():
 @app.post("/webhook")
 async def recibir_mensaje(request: Request):
     """
-    Recibe los mensajes entrantes de WhatsApp via Twilio.
-
-    Twilio envía un formulario con:
-    - From: número del cliente (ej. whatsapp:+584121234567)
-    - Body: texto del mensaje que escribió el cliente
-
-    Blindado para que un mensaje malformado o inesperado nunca tumbe
-    el servidor ni provoque reintentos infinitos de Twilio.
+    Recibe los mensajes entrantes de WhatsApp via WASender API.
+    Extrae sender y message del JSON.
     """
     user_id = None
 
     try:
-        # ── Paso 1: Extraer y limpiar los datos de forma segura ─────
-        form = await request.form()
-        user_id    = str(form.get("From", "") or "").strip()
-        user_input = str(form.get("Body", "") or "").strip()
+        # ── Paso 1: Extraer y limpiar los datos de forma segura desde JSON ─────
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+
+        safe_print(f"[WEBHOOK DEBUG] Payload recibido: {data}")
+
+        # Estructura de WASender: data -> messages -> key/messageBody
+        inner_data = data.get("data", {})
+        messages = inner_data.get("messages", {})
+        key = messages.get("key", {})
+
+        # Ignorar mensajes enviados por el propio bot para evitar bucles de respuesta
+        if key.get("fromMe") is True:
+            safe_print("[WEBHOOK] Mensaje enviado por el propio bot (fromMe=True). Se ignora.")
+            return {"status": "ok"}
+
+        # Extraemos el remitente (priorizando cleanedSenderPn de key)
+        user_id = str(key.get("cleanedSenderPn") or "").strip()
+        if not user_id:
+            sender_pn = str(key.get("senderPn") or "").strip()
+            if "@" in sender_pn:
+                user_id = sender_pn.split("@")[0]
+            else:
+                user_id = sender_pn
+
+        # Extraemos el mensaje (messageBody o conversation)
+        user_input = str(messages.get("messageBody") or messages.get("message", {}).get("conversation") or "").strip()
 
         if not user_id:
-            # No hay a quién responder: se registra y se corta aquí,
-            # pero igual devolvemos 200 más abajo.
-            print("[WEBHOOK] Payload sin remitente (From). Se ignora.")
-            return PlainTextResponse("OK", status_code=200)
+            # No hay a quién responder: se registra y se corta aquí.
+            safe_print("[WEBHOOK] Payload sin remitente (cleanedSenderPn). Se ignora.")
+            return {"status": "ok"}
 
-        print(f"[WEBHOOK] Mensaje recibido de {user_id}: '{user_input}'")
+        safe_print(f"[WEBHOOK] Mensaje recibido de {user_id}: '{user_input}'")
 
         # ── Paso 2: Pasar a la máquina de estados (cerebro de Ángel) ─
         try:
-            if user_input.lower() in ["/ayuda", "ayuda"]:
-                respuesta_bot = UXHelper.get_user_manual()
+            # --- Carga de estado previo (Fase 3) ---
+            sesiones_guardadas = cargar_sesiones()
+            ahora = time.time()
+            es_primera_vez_o_expirado = False
+
+            if user_id in sesiones_guardadas:
+                sesion_usuario = sesiones_guardadas[user_id]
+                last_interaction = sesion_usuario.get("last_interaction", 0)
+                
+                # Expiración tras 24 horas (86400 segundos) de inactividad
+                if ahora - last_interaction > 86400:
+                    es_primera_vez_o_expirado = True
+                
+                maquina.sesiones[user_id] = sesion_usuario
             else:
-                respuesta_bot = maquina.procesar_transicion(user_id, user_input)
+                es_primera_vez_o_expirado = True
+                maquina.sesiones[user_id] = {
+                    "estado": maquina.ESTADO_MENU_PRINCIPAL,
+                    "tienda_actual": maquina.DB_PASTELERIA
+                }
+
+            if es_primera_vez_o_expirado:
+                # Forzar reset y enviar bienvenida en la primera interacción o tras 24h
+                maquina.sesiones[user_id]["estado"] = maquina.ESTADO_MENU_PRINCIPAL
+                maquina.sesiones[user_id]["tienda_actual"] = maquina.DB_PASTELERIA
+                respuesta_bot = interfaz.mostrar_bienvenida()
+            else:
+                if user_input.lower() in ["/ayuda", "ayuda"]:
+                    respuesta_bot = UXHelper.get_user_manual()
+                else:
+                    respuesta_bot = maquina.procesar_transicion(user_id, user_input)
+                
+            # --- Guardado de estado (Fase 3) ---
+            maquina.sesiones[user_id]["last_interaction"] = ahora
+            sesiones_guardadas[user_id] = maquina.sesiones[user_id]
+            guardar_sesiones(sesiones_guardadas)
+
         except Exception as e:
-            print(f"[ERROR FSM] {e}")
+            safe_print(f"[ERROR FSM] {e}")
             respuesta_bot = UXHelper.format_error("Hubo un problema interno procesando tu solicitud.")
 
-        print(f"[WEBHOOK] Respuesta del bot: '{respuesta_bot}'")
+        safe_print(f"[WEBHOOK] Respuesta lógica generada (longitud: {len(respuesta_bot)})")
 
         # ── Paso 3: Enviar respuesta de vuelta a WhatsApp ────────────
-        await enviar_mensaje_whatsapp(
+        enviado = await enviar_mensaje(
             numero_destino=user_id,
             mensaje=respuesta_bot
         )
+        
+        if enviado:
+            safe_print(f"[WEBHOOK] Enviado con éxito a {user_id}")
+        else:
+            safe_print(f"[WEBHOOK ERROR] No se pudo entregar el mensaje a {user_id}")
 
     except Exception as e:
-        # Red de seguridad final: cualquier fallo no previsto (form
-        # malformado, timeout de Twilio, lo que sea) cae aquí. Se
-        # intenta avisarle al usuario si se llegó a identificar su
-        # número; si ni eso se pudo, simplemente se registra el error.
-        print(f"[ERROR WEBHOOK] {e}")
+        # Red de seguridad final: cualquier fallo no previsto cae aquí.
+        safe_print(f"[ERROR WEBHOOK] {e}")
         if user_id:
             try:
-                await enviar_mensaje_whatsapp(
+                enviado_fallback = await enviar_mensaje(
                     numero_destino=user_id,
                     mensaje=UXHelper.format_error("Hubo un problema procesando tu solicitud. Escribe *Menu* para reiniciar.")
                 )
+                if enviado_fallback:
+                    safe_print(f"[WEBHOOK] Mensaje de fallback (error) enviado a {user_id}")
+                else:
+                    safe_print(f"[WEBHOOK ERROR] Falló el envío del fallback a {user_id}")
             except Exception as e2:
-                print(f"[ERROR ENVÍO FALLBACK] {e2}")
+                safe_print(f"[ERROR ENVÍO FALLBACK] {e2}")
 
-    # ── Paso 4: Confirmar a Twilio que el webhook fue procesado ──────
-    # SIEMPRE 200 OK, incluso ante errores — así Twilio nunca reintenta
-    # el mismo mensaje pensando que el servidor está caído.
-    return PlainTextResponse("OK", status_code=200)
+    # Retornamos respuesta simple para confirmar la recepción
+    return {"status": "ok"}
 
 
 # ── Ruta de prueba: simular un mensaje sin WhatsApp real ─────────────

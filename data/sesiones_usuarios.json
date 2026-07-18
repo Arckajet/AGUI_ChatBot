@@ -1,0 +1,29 @@
+{
+    "whatsapp:+584121234567": {
+        "estado": "MENU_PRINCIPAL",
+        "tienda_actual": "C:\\Users\\admar\\OneDrive\\Documents\\Projectos\\AGUI_ChatBot\\data\\inventario_pasteleria.json"
+    },
+    "whatsapp:+584165440743": {
+        "estado": "MENU_PRINCIPAL",
+        "tienda_actual": "C:\\Users\\admar\\OneDrive\\Documents\\Projectos\\AGUI_ChatBot\\data\\inventario_pasteleria.json"
+    },
+    "584124953061": {
+        "estado": "MENU_PRINCIPAL",
+        "tienda_actual": "C:\\Users\\admar\\OneDrive\\Documents\\Projectos\\AGUI_ChatBot\\data\\inventario_pasteleria.json",
+        "last_interaction": 1784405255.9407783
+    },
+    "584128961647": {
+        "estado": "VISTA_CATALOGO",
+        "tienda_actual": "C:\\Users\\admar\\OneDrive\\Documents\\Projectos\\AGUI_ChatBot\\data\\inventario_pasteleria.json",
+        "last_interaction": 1784405623.4874964
+    },
+    "584165440743": {
+        "estado": "REGISTRANDO_INCIDENCIA",
+        "tienda_actual": "C:\\Users\\admar\\OneDrive\\Documents\\Projectos\\AGUI_ChatBot\\data\\inventario_pasteleria.json",
+        "last_interaction": 1784407257.2251146
+    },
+    "584141165045": {
+        "estado": "MENU_PRINCIPAL",
+        "tienda_actual": "C:\\Users\\admar\\OneDrive\\Documents\\Projectos\\AGUI_ChatBot\\data\\inventario_pasteleria.json"
+    }
+}

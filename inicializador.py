@@ -14,7 +14,7 @@ from datetime import datetime
 # ── Rutas de los archivos del sistema ────────────────────────────────
 RUTA_DATA             = "data"
 RUTA_INCIDENCIAS      = "data/incidencias.json"
-RUTA_SESIONES         = "data/sesiones_usuarios.json"
+RUTA_SESIONES         = "data/sesiones_usuario.json"
 RUTA_INV_PASTELERIA   = "data/inventario_pasteleria.json"
 RUTA_INV_VIDEOJUEGOS  = "data/inventario_videojuegos.json"
 
