@@ -10,15 +10,38 @@
 # pyrefly: ignore [missing-import]
 import uvicorn
 # pyrefly: ignore [missing-import]
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 # pyrefly: ignore [missing-import]
 from fastapi.responses import PlainTextResponse
 # pyrefly: ignore [missing-import]
 import httpx
 # pyrefly: ignore [missing-import]
 import os
+import json
 from utils.check_system import main as run_check
 from utils.ux_helper import UXHelper
+
+from twilio.rest import Client
+
+RUTA_SESIONES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "sesiones_usuarios.json")
+
+def cargar_sesiones():
+    """Carga las sesiones desde el archivo JSON de forma segura."""
+    try:
+        with open(RUTA_SESIONES, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        # Si no existe o está corrupto, retorna un dict vacío y no tumba el server
+        return {}
+
+def guardar_sesiones(sesiones_dict):
+    """Guarda las sesiones en el archivo JSON."""
+    try:
+        os.makedirs(os.path.dirname(RUTA_SESIONES), exist_ok=True)
+        with open(RUTA_SESIONES, "w", encoding="utf-8") as f:
+            json.dump(sesiones_dict, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"[ERROR PERSISTENCIA] No se pudo guardar la sesión: {e}")
 
 # Importar el cerebro del bot (Ángel)
 from core.estados import MaquinaEstadosAGUI
@@ -37,42 +60,53 @@ run_check()
 # Una sola instancia de la máquina compartida por todos los usuarios
 maquina = MaquinaEstadosAGUI()
 
-# ── Credenciales Twilio (se leen desde variables de entorno) ─────────
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "")
-TWILIO_AUTH_TOKEN  = os.getenv("TWILIO_AUTH_TOKEN", "")
-TWILIO_WHATSAPP_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
-
 # Mensaje de error genérico pedido en la guía de Fase 4
 MENSAJE_ERROR_USUARIO = "⚠️ Error, intenta de nuevo. Escribe *Menu* para reiniciar."
 
 
 # ── Función auxiliar: enviar mensaje de vuelta a WhatsApp ────────────
-async def enviar_mensaje_whatsapp(numero_destino: str, mensaje: str):
+async def enviar_mensaje_whatsapp(numero_destino: str, mensaje: str) -> bool:
     """
     Envía un mensaje de texto al cliente via Twilio WhatsApp API.
-    numero_destino debe tener el formato: whatsapp:+584121234567
+    numero_destino debe tener el formato: whatsapp:+584121234567.
+    Si no tiene el prefijo 'whatsapp:', se le añade automáticamente.
     """
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
+    # Cargar credenciales localmente para evitar variables globales
+    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
+    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
+    whatsapp_from = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+
+    # Validación y formateo del número de destino
+    if not numero_destino.startswith("whatsapp:"):
+        numero_destino = f"whatsapp:{numero_destino}"
+
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
 
     payload = {
-        "From": TWILIO_WHATSAPP_FROM,
+        "From": whatsapp_from,
         "To":   numero_destino,
         "Body": mensaje
     }
 
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            url,
-            data=payload,
-            auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        )
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                data=payload,
+                auth=(account_sid, auth_token),
+                timeout=10.0
+            )
 
-    if response.status_code == 201:
-        print(f"[TWILIO OK] Mensaje enviado a {numero_destino}")
-    else:
-        print(f"[TWILIO ERROR] {response.status_code} — {response.text}")
+        if response.status_code == 201:
+            print(f"[TWILIO OK] Mensaje enviado a {numero_destino}")
+            return True
+        else:
+            print(f"[TWILIO ERROR] {response.status_code} — {response.text}")
+            return False
 
-    return response
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError) as e:
+        print(f"[TWILIO EXCEPTION] Error al conectar con Twilio para {numero_destino}: {e}")
+        return False
 
 
 # ── Ruta raíz: verificar que el servidor está vivo ───────────────────
@@ -134,10 +168,25 @@ async def recibir_mensaje(request: Request):
 
         # ── Paso 2: Pasar a la máquina de estados (cerebro de Ángel) ─
         try:
+            # --- Carga de estado previo (Fase 3) ---
+            sesiones_guardadas = cargar_sesiones()
+            if user_id in sesiones_guardadas:
+                maquina.sesiones[user_id] = sesiones_guardadas[user_id]
+            else:
+                maquina.sesiones[user_id] = {
+                    "estado": maquina.ESTADO_MENU_PRINCIPAL,
+                    "tienda_actual": maquina.DB_PASTELERIA
+                }
+
             if user_input.lower() in ["/ayuda", "ayuda"]:
                 respuesta_bot = UXHelper.get_user_manual()
             else:
                 respuesta_bot = maquina.procesar_transicion(user_id, user_input)
+                
+            # --- Guardado de estado (Fase 3) ---
+            sesiones_guardadas[user_id] = maquina.sesiones[user_id]
+            guardar_sesiones(sesiones_guardadas)
+
         except Exception as e:
             print(f"[ERROR FSM] {e}")
             respuesta_bot = UXHelper.format_error("Hubo un problema interno procesando tu solicitud.")

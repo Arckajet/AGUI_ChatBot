@@ -1,0 +1,10 @@
+{
+    "whatsapp:+584121234567": {
+        "estado": "VISTA_CATALOGO",
+        "tienda_actual": "C:\\Users\\admar\\OneDrive\\Documents\\Projectos\\AGUI_ChatBot\\data\\inventario_videojuegos.json"
+    },
+    "whatsapp:+584165440743": {
+        "estado": "MENU_PRINCIPAL",
+        "tienda_actual": "C:\\Users\\admar\\OneDrive\\Documents\\Projectos\\AGUI_ChatBot\\data\\inventario_pasteleria.json"
+    }
+}
