@@ -250,7 +250,7 @@ async def recibir_mensaje(request: Request):
             try:
                 enviado_fallback = await enviar_mensaje(
                     numero_destino=user_id,
-                    mensaje=MENSAJE_ERROR_USUARIO
+                    mensaje=UXHelper.format_error("Hubo un problema procesando tu solicitud. Escribe *Menu* para reiniciar.")
                 )
                 if enviado_fallback:
                     safe_print(f"[WEBHOOK] Mensaje de fallback (error) enviado a {user_id}")
@@ -275,7 +275,7 @@ async def test_mensaje(user_id: str, mensaje: str):
     try:
         respuesta = maquina.procesar_transicion(user_id, mensaje)
     except Exception as e:
-        respuesta = f"Error: {str(e)}"
+        respuesta = UXHelper.format_error(str(e))
 
     return {
         "user_id":   user_id,
