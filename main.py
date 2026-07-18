@@ -18,10 +18,24 @@ import httpx
 # pyrefly: ignore [missing-import]
 import os
 import json
+import time
+import interfaz
 from utils.check_system import main as run_check
 from utils.ux_helper import UXHelper
 
-from twilio.rest import Client
+
+def safe_print(*args, **kwargs):
+    """Imprime de forma segura en la consola de Windows evitando UnicodeEncodeError."""
+    try:
+        text = " ".join(str(arg) for arg in args)
+        print(text, **kwargs)
+    except UnicodeEncodeError:
+        try:
+            # Reemplazar emojis/caracteres no cp1252 con "?"
+            clean_text = text.encode('ascii', errors='replace').decode('ascii')
+            print(clean_text, **kwargs)
+        except Exception:
+            pass
 
 RUTA_SESIONES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "sesiones_usuarios.json")
 
@@ -53,10 +67,6 @@ app = FastAPI(
     version="2.1.0"
 )
 
-# --- EJECUCIÓN DEL CHEQUEO AL INICIO ---
-print("🚀 Verificando sistema antes de arrancar...")
-run_check()
-
 # Una sola instancia de la máquina compartida por todos los usuarios
 maquina = MaquinaEstadosAGUI()
 
@@ -64,48 +74,41 @@ maquina = MaquinaEstadosAGUI()
 MENSAJE_ERROR_USUARIO = "⚠️ Error, intenta de nuevo. Escribe *Menu* para reiniciar."
 
 
-# ── Función auxiliar: enviar mensaje de vuelta a WhatsApp ────────────
-async def enviar_mensaje_whatsapp(numero_destino: str, mensaje: str) -> bool:
+# ── Función auxiliar: enviar mensaje de vuelta a WhatsApp con la nueva API ────────────
+async def enviar_mensaje(numero_destino: str, mensaje: str) -> bool:
     """
-    Envía un mensaje de texto al cliente via Twilio WhatsApp API.
-    numero_destino debe tener el formato: whatsapp:+584121234567.
-    Si no tiene el prefijo 'whatsapp:', se le añade automáticamente.
+    Envía un mensaje de texto al cliente a través del nuevo proveedor WASender.
     """
-    # Cargar credenciales localmente para evitar variables globales
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID", "")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN", "")
-    whatsapp_from = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+    url = os.getenv("WASENDER_API_URL", "https://api.wasenderapi.com/v1/send/message")
+    token = os.getenv("WASENDER_API_TOKEN", "")
 
-    # Validación y formateo del número de destino
-    if not numero_destino.startswith("whatsapp:"):
-        numero_destino = f"whatsapp:{numero_destino}"
-
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
-
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
     payload = {
-        "From": whatsapp_from,
-        "To":   numero_destino,
-        "Body": mensaje
+        "to": numero_destino,
+        "text": mensaje
     }
 
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url,
-                data=payload,
-                auth=(account_sid, auth_token),
+                json=payload,
+                headers=headers,
                 timeout=10.0
             )
 
-        if response.status_code == 201:
-            print(f"[TWILIO OK] Mensaje enviado a {numero_destino}")
+        if response.status_code in [200, 201]:
+            print(f"[WASENDER OK] Mensaje enviado a {numero_destino}")
             return True
         else:
-            print(f"[TWILIO ERROR] {response.status_code} — {response.text}")
+            print(f"[WASENDER ERROR] {response.status_code} — {response.text}")
             return False
 
     except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError) as e:
-        print(f"[TWILIO EXCEPTION] Error al conectar con Twilio para {numero_destino}: {e}")
+        print(f"[WASENDER EXCEPTION] Error al conectar con WASender para {numero_destino}: {e}")
         return False
 
 
@@ -141,83 +144,123 @@ def home():
 @app.post("/webhook")
 async def recibir_mensaje(request: Request):
     """
-    Recibe los mensajes entrantes de WhatsApp via Twilio.
-
-    Twilio envía un formulario con:
-    - From: número del cliente (ej. whatsapp:+584121234567)
-    - Body: texto del mensaje que escribió el cliente
-
-    Blindado para que un mensaje malformado o inesperado nunca tumbe
-    el servidor ni provoque reintentos infinitos de Twilio.
+    Recibe los mensajes entrantes de WhatsApp via WASender API.
+    Extrae sender y message del JSON.
     """
     user_id = None
 
     try:
-        # ── Paso 1: Extraer y limpiar los datos de forma segura ─────
-        form = await request.form()
-        user_id    = str(form.get("From", "") or "").strip()
-        user_input = str(form.get("Body", "") or "").strip()
+        # ── Paso 1: Extraer y limpiar los datos de forma segura desde JSON ─────
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+
+        safe_print(f"[WEBHOOK DEBUG] Payload recibido: {data}")
+
+        # Estructura de WASender: data -> messages -> key/messageBody
+        inner_data = data.get("data", {})
+        messages = inner_data.get("messages", {})
+        key = messages.get("key", {})
+
+        # Ignorar mensajes enviados por el propio bot para evitar bucles de respuesta
+        if key.get("fromMe") is True:
+            safe_print("[WEBHOOK] Mensaje enviado por el propio bot (fromMe=True). Se ignora.")
+            return {"status": "ok"}
+
+        # Extraemos el remitente (priorizando cleanedSenderPn de key)
+        user_id = str(key.get("cleanedSenderPn") or "").strip()
+        if not user_id:
+            sender_pn = str(key.get("senderPn") or "").strip()
+            if "@" in sender_pn:
+                user_id = sender_pn.split("@")[0]
+            else:
+                user_id = sender_pn
+
+        # Extraemos el mensaje (messageBody o conversation)
+        user_input = str(messages.get("messageBody") or messages.get("message", {}).get("conversation") or "").strip()
 
         if not user_id:
-            # No hay a quién responder: se registra y se corta aquí,
-            # pero igual devolvemos 200 más abajo.
-            print("[WEBHOOK] Payload sin remitente (From). Se ignora.")
-            return PlainTextResponse("OK", status_code=200)
+            # No hay a quién responder: se registra y se corta aquí.
+            safe_print("[WEBHOOK] Payload sin remitente (cleanedSenderPn). Se ignora.")
+            return {"status": "ok"}
 
-        print(f"[WEBHOOK] Mensaje recibido de {user_id}: '{user_input}'")
+        safe_print(f"[WEBHOOK] Mensaje recibido de {user_id}: '{user_input}'")
 
         # ── Paso 2: Pasar a la máquina de estados (cerebro de Ángel) ─
         try:
             # --- Carga de estado previo (Fase 3) ---
             sesiones_guardadas = cargar_sesiones()
+            ahora = time.time()
+            es_primera_vez_o_expirado = False
+
             if user_id in sesiones_guardadas:
-                maquina.sesiones[user_id] = sesiones_guardadas[user_id]
+                sesion_usuario = sesiones_guardadas[user_id]
+                last_interaction = sesion_usuario.get("last_interaction", 0)
+                
+                # Expiración tras 24 horas (86400 segundos) de inactividad
+                if ahora - last_interaction > 86400:
+                    es_primera_vez_o_expirado = True
+                
+                maquina.sesiones[user_id] = sesion_usuario
             else:
+                es_primera_vez_o_expirado = True
                 maquina.sesiones[user_id] = {
                     "estado": maquina.ESTADO_MENU_PRINCIPAL,
                     "tienda_actual": maquina.DB_PASTELERIA
                 }
 
-            if user_input.lower() in ["/ayuda", "ayuda"]:
-                respuesta_bot = UXHelper.get_user_manual()
+            if es_primera_vez_o_expirado:
+                # Forzar reset y enviar bienvenida en la primera interacción o tras 24h
+                maquina.sesiones[user_id]["estado"] = maquina.ESTADO_MENU_PRINCIPAL
+                maquina.sesiones[user_id]["tienda_actual"] = maquina.DB_PASTELERIA
+                respuesta_bot = interfaz.mostrar_bienvenida()
             else:
-                respuesta_bot = maquina.procesar_transicion(user_id, user_input)
+                if user_input.lower() in ["/ayuda", "ayuda"]:
+                    respuesta_bot = UXHelper.get_user_manual()
+                else:
+                    respuesta_bot = maquina.procesar_transicion(user_id, user_input)
                 
             # --- Guardado de estado (Fase 3) ---
+            maquina.sesiones[user_id]["last_interaction"] = ahora
             sesiones_guardadas[user_id] = maquina.sesiones[user_id]
             guardar_sesiones(sesiones_guardadas)
 
         except Exception as e:
-            print(f"[ERROR FSM] {e}")
+            safe_print(f"[ERROR FSM] {e}")
             respuesta_bot = UXHelper.format_error("Hubo un problema interno procesando tu solicitud.")
 
-        print(f"[WEBHOOK] Respuesta del bot: '{respuesta_bot}'")
+        safe_print(f"[WEBHOOK] Respuesta lógica generada (longitud: {len(respuesta_bot)})")
 
         # ── Paso 3: Enviar respuesta de vuelta a WhatsApp ────────────
-        await enviar_mensaje_whatsapp(
+        enviado = await enviar_mensaje(
             numero_destino=user_id,
             mensaje=respuesta_bot
         )
+        
+        if enviado:
+            safe_print(f"[WEBHOOK] Enviado con éxito a {user_id}")
+        else:
+            safe_print(f"[WEBHOOK ERROR] No se pudo entregar el mensaje a {user_id}")
 
     except Exception as e:
-        # Red de seguridad final: cualquier fallo no previsto (form
-        # malformado, timeout de Twilio, lo que sea) cae aquí. Se
-        # intenta avisarle al usuario si se llegó a identificar su
-        # número; si ni eso se pudo, simplemente se registra el error.
-        print(f"[ERROR WEBHOOK] {e}")
+        # Red de seguridad final: cualquier fallo no previsto cae aquí.
+        safe_print(f"[ERROR WEBHOOK] {e}")
         if user_id:
             try:
-                await enviar_mensaje_whatsapp(
+                enviado_fallback = await enviar_mensaje(
                     numero_destino=user_id,
                     mensaje=MENSAJE_ERROR_USUARIO
                 )
+                if enviado_fallback:
+                    safe_print(f"[WEBHOOK] Mensaje de fallback (error) enviado a {user_id}")
+                else:
+                    safe_print(f"[WEBHOOK ERROR] Falló el envío del fallback a {user_id}")
             except Exception as e2:
-                print(f"[ERROR ENVÍO FALLBACK] {e2}")
+                safe_print(f"[ERROR ENVÍO FALLBACK] {e2}")
 
-    # ── Paso 4: Confirmar a Twilio que el webhook fue procesado ──────
-    # SIEMPRE 200 OK, incluso ante errores — así Twilio nunca reintenta
-    # el mismo mensaje pensando que el servidor está caído.
-    return PlainTextResponse("OK", status_code=200)
+    # Retornamos respuesta simple para confirmar la recepción
+    return {"status": "ok"}
 
 
 # ── Ruta de prueba: simular un mensaje sin WhatsApp real ─────────────
